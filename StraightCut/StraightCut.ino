@@ -1,3 +1,6 @@
+// Arduino Code for Straight Cut Machine, included two rotary encoder, two stepper motor,
+// four limit sensor (proximity), and two relay for LED control.
+
 #include <AccelStepper.h>
 
 // --- Encoder 1 (KY-1: X & Y together) ---
