@@ -1,239 +1,205 @@
 #include <AccelStepper.h>
 
-const int stepPul = 8;
-const int stepDir = 9;
-const int stepEna = 10;
+// --- Stepper driver pins ---
+#define STEP_PUL_PIN 8
+#define STEP_DIR_PIN 9
+#define STEP_ENA_PIN 10
 
-AccelStepper stepper(1, stepPul, stepDir);
-const float maxSpeed = 5000;
-const float acceleration = 50;
-const float speed = 2500;
-
-const int btn1 = 29;
-const int btn2 = 31;
+// --- Control buttons ---
+#define BTN_FORWARD_PIN 29
+#define BTN_REVERSE_PIN 31
 
 // --- X limit pins ---
-const int X_MIN_PIN = 35; // stops negative direction (min)
-const int X_MAX_PIN = 39; // stops positive direction (max)
-const bool PROX_ACTIVE_LOW = true; // set false if your switches are active HIGH
+#define X_MIN_PIN 35
+#define X_MAX_PIN 39
+const bool proxActiveLow = true;
 
-// Helper: interpret raw pin according to active polarity
-inline bool proxTriggeredRaw(int pin) {
-  int v = digitalRead(pin);
-  return PROX_ACTIVE_LOW ? (v == LOW) : (v == HIGH);
+// --- Stepper ---
+AccelStepper stepper(AccelStepper::DRIVER, STEP_PUL_PIN, STEP_DIR_PIN);
+const float maxSpeed = 5000.0f;
+const float acceleration = 50.0f;
+const float runSpeed = 2500.0f;
+
+// --- Mechanics ---
+const long stepsPerRev = 800;
+const float leadMm = 5.0f;
+const long stepsPerMm = (long)(stepsPerRev / leadMm);
+
+// --- Button debounce ---
+const unsigned long debounceMs = 20;
+unsigned long lastChangeBtnForward = 0;
+unsigned long lastChangeBtnReverse = 0;
+
+bool rawBtnForward = false;
+bool rawBtnReverse = false;
+bool stableBtnForward = false;
+bool stableBtnReverse = false;
+bool lastRawBtnForward = false;
+bool lastRawBtnReverse = false;
+
+// --- Limit states ---
+bool xMinTriggered = false;
+bool xMaxTriggered = false;
+
+// --- Motion state ---
+//  1 = +X, -1 = -X, 0 = stop
+int directionState = 0;
+
+// --- Homing timeout ---
+const unsigned long homingTimeoutMs = 30000;
+
+// === Helpers ===
+inline bool proxTriggered(int pin) {
+  return proxActiveLow ? (digitalRead(pin) == LOW)
+                       : (digitalRead(pin) == HIGH);
 }
 
-// Cached limit states
-bool xMinTrig = false;
-bool xMaxTrig = false;
+// === Homing (to X_MIN) ===
+void homeToMin() {
+  Serial.println("Homing: X_MIN");
 
-// Mechanics for homing & step/mm
-const long  STEPS_PER_REV = 800;     // microsteps per revolution
-const float LEAD_MM       = 5.0;     // ballscrew 1605
-const long  STEPS_PER_MM  = (long)(STEPS_PER_REV / LEAD_MM); // 160 steps per mm approx
-
-int lastState = 0;  
-
-const unsigned long DEBOUNCE_MS = 20UL;
-unsigned long lastChangeB1 = 0;
-unsigned long lastChangeB2 = 0;
-
-// Raw & stable states
-bool rawB1 = false, rawB2 = false;
-bool stableB1 = false, stableB2 = false;
-
-// last read values to detect edges for debounce timing
-bool lastRawB1 = false, lastRawB2 = false;
-
-int dirState = 0;     // 0=stop, -1=ccw, 1=cw
-
-// homing timeout (ms)
-const unsigned long HOMING_TIMEOUT_MS = 30000UL; // 30 seconds
-
-void doHomingToMin() {
-  Serial.println("Homing: searching for X_MIN...");
-
-  // Ensure driver enabled and set safe homing speeds
   stepper.enableOutputs();
-  stepper.setMaxSpeed(300);      // slow speed for homing
-  stepper.setAcceleration(500);  // moderate accel for homing
+  stepper.setMaxSpeed(300);
+  stepper.setAcceleration(500);
 
-  // Move negative a large amount
   stepper.moveTo(-100000L);
+  unsigned long startTime = millis();
 
-  unsigned long start = millis();
-  bool homed = false;
-
-  // run until min switch triggered or timeout
-  while (!homed) {
-    // check timeout
-    if ((millis() - start) > HOMING_TIMEOUT_MS) {
-      Serial.println("Homing TIMEOUT! Stop homing and continue.");
+  while (true) {
+    if (millis() - startTime > homingTimeoutMs) {
+      Serial.println("Homing timeout");
       stepper.stop();
-      // leave position as-is (it may be far); disable outputs to be safe
       stepper.disableOutputs();
       return;
     }
 
-    // read current state of min switch
-    if (proxTriggeredRaw(X_MIN_PIN)) {
-      // reached the min switch
-      stepper.stop();                  // request stop
-      // run until fully stopped (distanceToGo == 0)
+    if (proxTriggered(X_MIN_PIN)) {
+      stepper.stop();
       while (stepper.distanceToGo() != 0) {
         stepper.run();
       }
-      Serial.println("X axis homed (MIN).");
-      homed = true;
       break;
-    } else {
-      // continue moving
-      stepper.run();
     }
+
+    stepper.run();
   }
 
-  // Set current position to zero at the switch
   stepper.setCurrentPosition(0);
-  Serial.println("Position set to 0 at X_MIN.");
 
-  // Move +1 mm away from the switch
-  long oneMM = STEPS_PER_MM;
-  if (oneMM <= 0) oneMM = 1; // safety
-  Serial.println("Moving +1mm from home.");
-  stepper.moveTo(oneMM);
-
-  // run until arrived
+  // Move +1mm away from switch
+  long oneMmSteps = max(stepsPerMm, 1L);
+  stepper.moveTo(oneMmSteps);
   while (stepper.distanceToGo() != 0) {
     stepper.run();
   }
-  Serial.println("Homing complete. Ready.");
 
-  // restore normal motion params
   stepper.setMaxSpeed(maxSpeed);
   stepper.setAcceleration(acceleration);
-  // leave outputs enabled so buttons can drive immediately
 }
 
+// === Setup ===
 void setup() {
   Serial.begin(9600);
-  Serial.println("=== Single Stepper with Limits & Homing ===");
+  Serial.println("Single Stepper with Limits");
 
-  pinMode(stepEna, OUTPUT);
-  stepper.setEnablePin(stepEna);
-  stepper.disableOutputs(); // start disabled
+  pinMode(STEP_ENA_PIN, OUTPUT);
+  stepper.setEnablePin(STEP_ENA_PIN);
+  stepper.disableOutputs();
 
-  pinMode(btn1, INPUT_PULLUP);
-  pinMode(btn2, INPUT_PULLUP);
+  pinMode(BTN_FORWARD_PIN, INPUT_PULLUP);
+  pinMode(BTN_REVERSE_PIN, INPUT_PULLUP);
 
-  // limit switch pins
   pinMode(X_MIN_PIN, INPUT_PULLUP);
   pinMode(X_MAX_PIN, INPUT_PULLUP);
 
   stepper.setMaxSpeed(maxSpeed);
   stepper.setAcceleration(acceleration);
 
-  dirState = 0;
-
-  // Perform homing at startup
-  doHomingToMin();
-
-  // after homing ensure driver parameters are set for runtime
-  stepper.setMaxSpeed(maxSpeed);
-  stepper.setAcceleration(acceleration);
+  homeToMin();
 }
 
-void loop() {
-  readButtons();
-  updateProximityStates();   // read limits
-  action();
-  enforceLimitSwitches();    // block motion into triggered endstops
-  runStepper();
-}
-
+// === Read and debounce buttons ===
 void readButtons() {
-  // read raw (pressed = LOW)
-  rawB1 = (digitalRead(btn1) == LOW);
-  rawB2 = (digitalRead(btn2) == LOW);
+  rawBtnForward = (digitalRead(BTN_FORWARD_PIN) == LOW);
+  rawBtnReverse = (digitalRead(BTN_REVERSE_PIN) == LOW);
 
   unsigned long now = millis();
 
-  // B1 debounce
-  if (rawB1 != lastRawB1) {
-    lastChangeB1 = now;            // bounce started, reset timer
-    lastRawB1 = rawB1;
-  } else {
-    if ((now - lastChangeB1) >= DEBOUNCE_MS) {
-      // stable
-      stableB1 = rawB1;
-    }
+  if (rawBtnForward != lastRawBtnForward) {
+    lastChangeBtnForward = now;
+    lastRawBtnForward = rawBtnForward;
+  } else if (now - lastChangeBtnForward >= debounceMs) {
+    stableBtnForward = rawBtnForward;
   }
 
-  // B2 debounce
-  if (rawB2 != lastRawB2) {
-    lastChangeB2 = now;
-    lastRawB2 = rawB2;
-  } else {
-    if ((now - lastChangeB2) >= DEBOUNCE_MS) {
-      stableB2 = rawB2;
-    }
+  if (rawBtnReverse != lastRawBtnReverse) {
+    lastChangeBtnReverse = now;
+    lastRawBtnReverse = rawBtnReverse;
+  } else if (now - lastChangeBtnReverse >= debounceMs) {
+    stableBtnReverse = rawBtnReverse;
   }
 }
 
-void updateProximityStates() {
-  xMinTrig = proxTriggeredRaw(X_MIN_PIN);
-  xMaxTrig = proxTriggeredRaw(X_MAX_PIN);
-  // debug:
-  // if (xMinTrig) Serial.println("X_MIN active");
-  // if (xMaxTrig) Serial.println("X_MAX active");
+// === Update limit switch states ===
+void updateLimitStates() {
+  xMinTriggered = proxTriggered(X_MIN_PIN);
+  xMaxTriggered = proxTriggered(X_MAX_PIN);
 }
 
-void action(){
-  if (stableB1 && !stableB2){
-    // request CW (positive)
-    if (dirState != 1){
-      dirState = 1;
-      stepper.enableOutputs();
-    }
+// === Decide motion direction ===
+void updateDirection() {
+  if (stableBtnForward && !stableBtnReverse) {
+    directionState = 1;
+    stepper.enableOutputs();
   }
-  else if (!stableB1 && stableB2){
-    // request CCW (negative)
-    if (dirState != -1){
-      dirState = -1;
-      stepper.enableOutputs();
-    }
+  else if (!stableBtnForward && stableBtnReverse) {
+    directionState = -1;
+    stepper.enableOutputs();
   }
-  else{
-    dirState = 0;
+  else {
+    directionState = 0;
   }
 }
 
-void enforceLimitSwitches() {
-  // If a limit is triggered, block motion INTO that limit
-  if (dirState == 1 && xMaxTrig) {
-    // trying to move CW (+) but max is triggered -> stop
-    Serial.println("X_MAX triggered: blocking + movement");
-    dirState = 0;
+// === Block motion into active limits ===
+void enforceLimits() {
+  if (directionState == 1 && xMaxTriggered) {
+    directionState = 0;
     stepper.disableOutputs();
   }
-  else if (dirState == -1 && xMinTrig) {
-    // trying to move CCW (-) but min is triggered -> stop
-    Serial.println("X_MIN triggered: blocking - movement");
-    dirState = 0;
+  else if (directionState == -1 && xMinTriggered) {
+    directionState = 0;
     stepper.disableOutputs();
   }
-  // otherwise leave dirState alone (movement allowed)
 }
 
-void runStepper(){
-  if (dirState == 1){
-    stepper.setSpeed(speed);
+// === Run stepper ===
+void runStepper() {
+  if (directionState == 1) {
+    stepper.setSpeed(runSpeed);
     stepper.runSpeed();
   }
-  else if (dirState == -1){
-    stepper.setSpeed(-speed);
+  else if (directionState == -1) {
+    stepper.setSpeed(-runSpeed);
     stepper.runSpeed();
   }
-  else{
-    stepper.disableOutputs(); 
+  else {
+    stepper.disableOutputs();
   }
+}
+
+// === Main loop ===
+void loop() {
+  // Read buttons
+  readButtons();
+
+  // Enforce limitrs
+  updateLimitStates();
+  enforceLimits();
+
+  // Update direction motor
+  updateDirection();
+  
+  // Move steppers
+  runStepper();
 }
