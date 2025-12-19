@@ -1,3 +1,5 @@
+// Arduino code for Lathe Machine
+
 #include <AccelStepper.h>
 
 // --- Stepper driver pins ---
