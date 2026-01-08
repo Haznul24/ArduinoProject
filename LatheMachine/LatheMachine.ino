@@ -8,8 +8,8 @@
 #define STEP_ENA_PIN 10
 
 // --- Control buttons ---
-#define BTN_FORWARD_PIN 29
-#define BTN_REVERSE_PIN 31
+#define BTN_FORWARD_PIN 52
+#define BTN_REVERSE_PIN 53
 
 // --- X limit pins ---
 #define X_MIN_PIN 35

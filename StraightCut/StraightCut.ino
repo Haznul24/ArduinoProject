@@ -1,24 +1,24 @@
 // Arduino Code for Straight Cut Machine
-
+//
 #include <AccelStepper.h>
 
 // --- Encoder 1 (KY-1: X & Y together) ---
 #define ENC1_CLK 2
 #define ENC1_DT 3
-#define ENC1_SW 26
+#define ENC1_SW 24
 
 // --- Encoder 2 (KY-2: Y correction only) ---
 #define ENC2_CLK 19
 #define ENC2_DT 18
-#define ENC2_SW 30
+#define ENC2_SW 28
 
 // --- X / Y Stepper Drivers ---
-#define X_STEP 8
-#define X_DIR  9
-#define X_EN  10
-#define Y_STEP 11
-#define Y_DIR  12
-#define Y_EN   13
+#define X_STEP 13
+#define X_DIR  12
+#define X_EN  11
+#define Y_STEP 10
+#define Y_DIR  9
+#define Y_EN   8
 
 // --- Proximity sensor pins ---
 #define X_MIN_PIN 35
@@ -27,7 +27,7 @@
 #define Y_MAX_PIN 41
 const bool proxActiveLow = true;
 
-// --- Speed mode indicator relays ---
+// --- Lock indicator relays ---
 #define RELAY1 45
 #define RELAY2 47
 const bool relayActiveLow = true;
@@ -292,12 +292,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC1_DT),  enc1Isr, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC2_CLK), enc2Isr, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC2_DT),  enc2Isr, CHANGE);
-
-  pinMode(X_EN, OUTPUT);
-  pinMode(Y_EN, OUTPUT);
-
-  digitalWrite(X_EN, LOW);
-  digitalWrite(Y_EN, LOW);
 
   stepX.setEnablePin(X_EN);
   stepY.setEnablePin(Y_EN);
